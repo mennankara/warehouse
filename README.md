@@ -21,7 +21,7 @@ First, you need to clone the repository to the machine you are planning to run t
 ## Without Visual Studio 2019
 
 1. Install [.NET Core 3.1 SDK](https://dotnet.microsoft.com/download/dotnet-core/3.1)
-2. Open your favorite cli (cmd, powershell, bash) and navigate to the src/ folder.
+2. Open your favorite cli (cmd, powershell, bash) and navigate to the `src/` folder.
 3. Run the following commands:
     ```
     dotnet restore
