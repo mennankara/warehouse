@@ -32,21 +32,16 @@ namespace Warehouse.Domain.Internals.Service.Handlers
 
             var resultBuilder = new ResultBuilder();
 
-            ImportedInventory importedInventory;
 
-            try
-            {
-                importedInventory = await DeserializeInventoryStream(inventoryFileStream);
-            }
-            catch (WarehouseException e)
+            var importedInventoryResult = await DeserializeInventoryStream(inventoryFileStream);
+            if (!importedInventoryResult.IsSuccessful)
             {
                 return resultBuilder
-                    .FromException(e)
-                    .WithFailure(HttpStatusCode.BadRequest)
+                    .FromResult(importedInventoryResult)
                     .Build();
             }
 
-            var getArticlesResult = ConvertImportedArticles(importedInventory.Articles);
+            var getArticlesResult = ConvertImportedArticles(importedInventoryResult.Response.Articles);
             if (!getArticlesResult.IsSuccessful)
             {
                 return resultBuilder
@@ -70,9 +65,11 @@ namespace Warehouse.Domain.Internals.Service.Handlers
                 .Build();
         }
 
-        private async Task<ImportedInventory> DeserializeInventoryStream(Stream inventoryFileStream)
+        private async Task<Result<ImportedInventory>> DeserializeInventoryStream(Stream inventoryFileStream)
         {
             _logger.LogTrace("Starting to deserialize the uploaded json");
+
+            var resultBuilder = new ResultBuilder<ImportedInventory>();
 
             if (inventoryFileStream.CanSeek)
             {
@@ -84,7 +81,10 @@ namespace Warehouse.Domain.Internals.Service.Handlers
             if (inventoryJson == string.Empty)
             {
                 _logger.LogError("Empty json file detected");
-                throw new WarehouseException("Json file is empty");
+                return resultBuilder
+                    .WithFailure(HttpStatusCode.BadRequest)
+                    .WithError("Json file is empty")
+                    .Build();
             }
 
             ImportedInventory parsedJson;
@@ -95,16 +95,25 @@ namespace Warehouse.Domain.Internals.Service.Handlers
             catch (Exception e)
             {
                 _logger.LogError("Could not deserialize the json file", e);
-                throw new WarehouseException(e.Message);
+                return resultBuilder
+                    .WithFailure(HttpStatusCode.BadRequest)
+                    .WithError(e.Message)
+                    .Build();
             }
 
             if (parsedJson?.Articles == null)
             {
                 _logger.LogError("Parsed json has no articles property");
-                throw new WarehouseException("Json file does not contain inventory data");
+                return resultBuilder
+                    .WithFailure(HttpStatusCode.BadRequest)
+                    .WithError("Json file does not contain inventory data")
+                    .Build();
             }
 
-            return parsedJson;
+            return resultBuilder
+                .WithSuccess()
+                .WithData(parsedJson)
+                .Build();
         }
 
         private Result<List<Article>> ConvertImportedArticles(List<ImportedArticle> importedArticles)

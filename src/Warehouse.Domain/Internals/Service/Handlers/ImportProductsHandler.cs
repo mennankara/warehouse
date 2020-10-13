@@ -32,23 +32,20 @@ namespace Warehouse.Domain.Internals.Service.Handlers
 
             var resultBuilder = new ResultBuilder();
 
-            ImportedProducts importedProducts;
-            try
-            {
-                importedProducts = await DeserializeProductsStream(productsFileStream);
-            }
-            catch (WarehouseException e)
+            var importedProductsResult = await DeserializeProductsStream(productsFileStream);
+            if (!importedProductsResult.IsSuccessful)
             {
                 return resultBuilder
-                    .FromException(e)
-                    .WithFailure(HttpStatusCode.BadRequest)
+                    .FromResult(importedProductsResult)
                     .Build();
             }
 
-            var productsResult = ConvertImportedProducts(importedProducts.Products);
+            var productsResult = ConvertImportedProducts(importedProductsResult.Response.Products);
             if (!productsResult.IsSuccessful)
             {
-                return resultBuilder.FromResult(productsResult).Build();
+                return resultBuilder
+                    .FromResult(productsResult)
+                    .Build();
             }
 
             try
@@ -62,15 +59,16 @@ namespace Warehouse.Domain.Internals.Service.Handlers
                     .Build();
             }
 
-
             return resultBuilder
                 .WithSuccess()
                 .Build();
         }
 
-        private async Task<ImportedProducts> DeserializeProductsStream(Stream productsFileStream)
+        private async Task<Result<ImportedProducts>> DeserializeProductsStream(Stream productsFileStream)
         {
             _logger.LogTrace("Starting to deserialize the uploaded json");
+
+            var resultBuilder = new ResultBuilder<ImportedProducts>();
 
             if (productsFileStream.CanSeek)
             {
@@ -82,7 +80,10 @@ namespace Warehouse.Domain.Internals.Service.Handlers
             if (productsJson == string.Empty)
             {
                 _logger.LogError("Empty json file detected");
-                throw new WarehouseException("Json file is empty");
+                return resultBuilder
+                    .WithFailure(HttpStatusCode.BadRequest)
+                    .WithError("Json file is empty")
+                    .Build();
             }
 
             ImportedProducts parsedJson;
@@ -93,16 +94,25 @@ namespace Warehouse.Domain.Internals.Service.Handlers
             catch (Exception e)
             {
                 _logger.LogError("Could not deserialize the json file", e);
-                throw new WarehouseException(e.Message);
+                return resultBuilder
+                    .WithFailure(HttpStatusCode.BadRequest)
+                    .WithError(e.Message)
+                    .Build();
             }
 
             if (parsedJson.Products == null)
             {
                 _logger.LogError("Parsed json has no products property");
-                throw new WarehouseException("Json file does not contain products data");
+                return resultBuilder
+                    .WithFailure(HttpStatusCode.BadRequest)
+                    .WithError("Json file does not contain products data")
+                    .Build();
             }
 
-            return parsedJson;
+            return resultBuilder
+                .WithSuccess()
+                .WithData(parsedJson)
+                .Build();
         }
 
         private Result<List<Product>> ConvertImportedProducts(List<ImportedProduct> jsonProducts)
@@ -144,7 +154,7 @@ namespace Warehouse.Domain.Internals.Service.Handlers
                             resultBuilder.WithError($"Invalid article amount: {jsonProductArticle.Amount}", new Dictionary<string, string> { { "productIndex", i.ToString() } });
                         }
 
-                        importedProduct.ProductArticles.Add(new ProductArticle{ArticleId = articleId, AmountOfArticles = amount});
+                        importedProduct.ProductArticles.Add(new ProductArticle { ArticleId = articleId, AmountOfArticles = amount });
                     }
                 }
 

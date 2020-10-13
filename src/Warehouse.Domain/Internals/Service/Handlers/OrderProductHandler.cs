@@ -30,9 +30,19 @@ namespace Warehouse.Domain.Internals.Service.Handlers
 
             var resultBuilder = new ResultBuilder();
 
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return resultBuilder
+                    .WithError("Product name is required")
+                    .WithFailure(HttpStatusCode.NotFound)
+                    .Build();
+            }
+
+            Product product;
+            List<Article> articles;
             try
             {
-                var product = await _repository.GetProductAsync(name);
+                product = await _repository.GetProductAsync(name);
                 if (product == null)
                 {
                     _logger.LogError($"Product not found: {name}");
@@ -41,20 +51,9 @@ namespace Warehouse.Domain.Internals.Service.Handlers
                         .WithFailure(HttpStatusCode.NotFound)
                         .Build();
                 }
-                
-                if (!await IsInStock(product))
-                {
-                    _logger.LogError($"Product not in stock: {product.Name}");
-                    return resultBuilder
-                        .WithError("Product is not in stock")
-                        .WithFailure(HttpStatusCode.NotFound)
-                        .Build();
-                }
 
-                await UpdateArticleStocks(product);
-
-                // TODO: Possibly record the order (not in scope of the assignment)
-
+                var productsArticleIds = product.ProductArticles.Select(pa => pa.ArticleId).ToList();
+                articles = await _repository.GetArticlesAsync(productsArticleIds);
             }
             catch (WarehouseException e)
             {
@@ -63,15 +62,33 @@ namespace Warehouse.Domain.Internals.Service.Handlers
                     .Build();
             }
 
+            if (!IsInStock(product, articles))
+            {
+                _logger.LogError($"Product not in stock: {product.Name}");
+                return resultBuilder
+                    .WithError("Product is not in stock")
+                    .WithFailure(HttpStatusCode.NotFound)
+                    .Build();
+            }
+
+            var updateResult = await UpdateArticleStocks(product);
+            if (!updateResult.IsSuccessful)
+            {
+                return resultBuilder
+                    .FromResult(updateResult)
+                    .Build();
+            }
+
+            // TODO: Possibly record the order (not in scope of the assignment)
+
             return resultBuilder
                 .WithSuccess()
                 .Build();
         }
 
-        private async Task<bool> IsInStock(Product product)
+        private bool IsInStock(Product product, List<Article> articles)
         {
-            var productsArticleIds = product.ProductArticles.Select(pa => pa.ArticleId).ToList();
-            var articlesMap = (await _repository.GetArticlesAsync(productsArticleIds)).ToDictionary(a => a.ArticleId);
+            var articlesMap = articles.ToDictionary(a => a.ArticleId);
 
             foreach (var productArticle in product.ProductArticles)
             {
@@ -86,10 +103,12 @@ namespace Warehouse.Domain.Internals.Service.Handlers
             return true;
         }
 
-        private async Task UpdateArticleStocks(Product product)
+        private async Task<Result> UpdateArticleStocks(Product product)
         {
             // The revert logic here can be replaced with a database transaction, which would require the repository implementation
             // supporting the transactions, which I decided not to do due to limited time I have to deliver the solution
+
+            var resultBuilder = new ResultBuilder();
 
             var updatesToRevert = new List<UpdatedArticle>();
             foreach (var productArticle in product.ProductArticles)
@@ -113,8 +132,11 @@ namespace Warehouse.Domain.Internals.Service.Handlers
                     {
                         _logger.LogCritical(exception, "Unable to revert the order");
                     }
+
                     _logger.LogError($"Quantity deduction failed for article {productArticle.ArticleId} with quantity {productArticle.AmountOfArticles}", e);
-                    throw;
+                    return resultBuilder
+                        .FromException(e)
+                        .Build();
                 }
 
                 updatesToRevert.Add(new UpdatedArticle
@@ -123,6 +145,10 @@ namespace Warehouse.Domain.Internals.Service.Handlers
                     Quantity = productArticle.AmountOfArticles
                 });
             }
+
+            return resultBuilder
+                .WithSuccess()
+                .Build();
         }
 
         private struct UpdatedArticle
